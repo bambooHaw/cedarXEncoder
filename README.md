@@ -1,4 +1,6 @@
-# CedarX Encoder libs
+# cedarXEncoder libs and testApp
+yuv420 to h264 encoder test successful at A83T using /dev/ion with arm-buildroot-linux-gnueabi4.8.5  
+
 [interface libs ref from](https://github.com/andrewz1/cedarx_encoder.git)
 [app and some h file ref from](https://github.com/allwinner-zh)
 [based on CedarX-12.06.2015](https://github.com/fsebentley/CedarX-12.06.2015.git)
