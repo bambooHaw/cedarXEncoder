@@ -1,10 +1,9 @@
-CC = gcc
 CFLAGS = -pthread -Wall -O3
-CPPFLAGS = -I../vencoder/include
+CPPFLAGS = -I../vencoder/include -I../includes
 
 LDFLAGS =
-LOADLIBES = -L/usr/lib/cedarx
-LDLIBS = -lcedar_vencoder -ldl
+LOADLIBES = -L$(INSTALL_DIR_LIBS)
+LDLIBS = -lcedar_vencoder -lcedar_base -lcedar_common -ldl
 
 SRCS = VideoTest.c
 OBJS = $(SRCS:.c=.o)
@@ -16,6 +15,7 @@ all: clean $(OBJS) $(BINS)
 
 $(BINS): $(OBJS)
 	$(LINK.c) $^ $(LOADLIBES) $(LDLIBS) -o $@
+	cp $(BINS) $(INSTALL_DIR_APPS)
 
 clean:
 	$(RM) $(BINS) $(OBJS)
