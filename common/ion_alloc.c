@@ -104,7 +104,6 @@ void *ion_alloc_alloc(int size) {
 	alloc.len = size;
 	alloc.align = PAGE_SIZE;
 	alloc.heap_id_mask = ION_HEAP_TYPE_DMA;
-	//alloc.heap_id_mask = ION_HEAP_TYPE_DMA_MASK;
 	alloc.flags = ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC;
 	ret = ioctl(ion_fd, ION_IOC_ALLOC, &alloc);
 	if (ret < 0) {

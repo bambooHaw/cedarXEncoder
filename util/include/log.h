@@ -35,7 +35,6 @@
 #define loge(fmt, arg...) \
     do { \
         AWLOG(LOG_LEVEL_ERROR, "\033[40;31m"fmt"\033[0m", ##arg) ; \
-        CdxBTDump(); \
     } while (0)
     
 #define logw(fmt, arg...) AWLOG(LOG_LEVEL_WARNING, fmt, ##arg)

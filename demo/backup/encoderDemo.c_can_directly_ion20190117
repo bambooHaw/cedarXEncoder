@@ -6,6 +6,9 @@
 #include "vencoder.h"
 #include "ion_alloc.h"
 
+//use ion function: 0: not directly, 1: directly
+#define USING_ION_INTERFACE_DIRECTLY 0
+
 #define ENCODING_TO_H264	1
 
 typedef struct _encoderInfo
@@ -20,7 +23,9 @@ typedef struct _encoderInfo
 
 	VencBaseConfig baseConfig;	//编码器基本初始化信息，包括是否做 scaler，颜色格式等
 	
+#if (1 != USING_ION_INTERFACE_DIRECTLY)
 	VencAllocateBufferParam bufferParam;	//buffer空间，用于图像的处理缓存
+#endif
 
 	/*
 	inputbuffer: 输入图像帧的buffer, buffer可由AllocInputBuffer()获得获取
@@ -71,9 +76,9 @@ void _encoderInfoInit(encoderInfo_t* p)
 	p->h264Param.bEntropyCodingCABAC = 1;	///* 0:CAVLC 1:CABAC*/
 	p->h264Param.sQPRange.nMinqp = 10;
 	p->h264Param.sQPRange.nMaxqp = 40;
-	p->h264Param.nFramerate = 30; /* fps */
-	p->h264Param.nBitrate = 4*1920*1080; /* bps 码率(code rate): 4*1024*1024 */
-	p->h264Param.nMaxKeyInterval = p->h264Param.nFramerate / 2;
+	p->h264Param.nFramerate = 25; /* fps */
+	p->h264Param.nBitrate = 4*1024*1024; /* bps 码率(code rate) */
+	p->h264Param.nMaxKeyInterval = p->h264Param.nFramerate;
 	p->h264Param.nCodingMode = VENC_FIELD_CODING;	//VENC_FRAME_CODING;
 #endif
 
@@ -91,10 +96,12 @@ void _encoderInfoInit(encoderInfo_t* p)
 	p->sizeC = p->sizeY/2;
 
 	
+#if (1 != USING_ION_INTERFACE_DIRECTLY)
 	memset(&p->bufferParam, 0, sizeof(VencAllocateBufferParam));
 	p->bufferParam.nBufferNum = 2;	//4;
 	p->bufferParam.nSizeY = p->sizeY;
 	p->bufferParam.nSizeC = p->sizeC;
+#endif 
 
 }
 
@@ -103,12 +110,12 @@ void _debugShowBufferInfo(encoderInfo_t* p)
 	printf("###################################################\n");
 	printf("---------------------------------------------------\n");
 	printf("inputBuffer:\n");
-	printf(" nID:%d\n nPts:%ld\n nFlags:%ld\n ispPicVar:%d\n", \
+	printf(" nID:%d\n nPts:%d\n nFlags:%d\n ispPicVar:%d\n", \
 		p->inputBuffer.nID, p->inputBuffer.nPts, p->inputBuffer.nFlag, p->inputBuffer.ispPicVar);
-	printf(" PhyY:%p VirY:%p\n PhyC:%p VirC:%p\n", p->inputBuffer.pAddrPhyY, p->inputBuffer.pAddrVirY, p->inputBuffer.pAddrPhyC, p->inputBuffer.pAddrVirC);
+	printf(" PhyY:0x%08x VirY:0x%08x\n PhyC:0x%08x VirC:0x%08x\n", p->inputBuffer.pAddrPhyY, p->inputBuffer.pAddrVirY, p->inputBuffer.pAddrPhyC, p->inputBuffer.pAddrVirC);
 		
 	printf("outputBuffer:\n");
-	printf(" nID:%d\n nPts:%d\n nFlags:%ld\n nSize0:%d\n nSize1:%d\n pData0:%p\n pData1:%p\n", \
+	printf(" nID:%d\n nPts:%d\n nFlags:%d\n nSize0:%d\n nSize1:%d\n pData0:%p\n pData1:%p\n", \
 		p->outputBuffer.nID, p->outputBuffer.nPts, p->outputBuffer.nFlag, \
 		p->outputBuffer.nSize0, p->outputBuffer.nSize1, \
 		p->outputBuffer.pData0, p->outputBuffer.pData1);
@@ -148,10 +155,7 @@ int main()
 	//1. 视频编码器支持创建多个编码器，支持多路编码
 	g.pVideoEnc = VideoEncCreate(g.codecType);
 	if(!g.pVideoEnc)
-	{
 		loge("VideoEncCreate");
-		goto out;
-	}
 	
 	//2. 设置编码信息
 	if(VENC_CODEC_H264 == g.codecType)
@@ -164,20 +168,38 @@ int main()
 	if(ret)
 		loge("VideoEncInit");
 	
-	//4 获取buffer空间，用于图像的处理缓存
+	//4.1 获取buffer空间，用于图像的处理缓存
+#if(1 == USING_ION_INTERFACE_DIRECTLY)
+	ret = ion_alloc_open();
+	if(ret)
+		loge("ion_alloc_open");
+
+	g.inputBuffer.pAddrVirY = (char *)ion_alloc_alloc(g.sizeY);
+	if (!g.inputBuffer.pAddrVirY)
+		loge("inputBuffer.pAddrVirY is NULL");
+		
+	g.inputBuffer.pAddrVirC = (char *)ion_alloc_alloc(g.sizeC);
+	if (!g.inputBuffer.pAddrVirC)
+		loge("inputBuffer.pAddrVirC is NULL");
+
+	g.inputBuffer.pAddrPhyY = (char *)ion_alloc_vir2phy(g.inputBuffer.pAddrVirY);
+	g.inputBuffer.pAddrPhyC = (char *)ion_alloc_vir2phy(g.inputBuffer.pAddrVirC);
+
+#else
 	ret = AllocInputBuffer(g.pVideoEnc, &g.bufferParam);
+#endif
 
 
-	//5.1 保存每一帧
 	for(testNum=0; testNum< g.h264Param.nFramerate; testNum++)
 	{
 	
 		unsigned int _sizeY, _sizeC;
 		
+#if(1 != USING_ION_INTERFACE_DIRECTLY)
 		ret = GetOneAllocInputBuffer(g.pVideoEnc, &g.inputBuffer);
 		if(ret)
 			loge("GetOneAllocInputBuffer");
-			
+#endif
 		_sizeY = fread(g.inputBuffer.pAddrVirY, 1, g.sizeY, in_file);
 		_sizeC = fread(g.inputBuffer.pAddrVirC, 1, g.sizeC, in_file);
 
@@ -188,19 +210,24 @@ int main()
 			_sizeC = fread(g.inputBuffer.pAddrVirC, 1, g.sizeC, in_file);
 		}
 		
-		//g.inputBuffer.bEnableCorp = 0;
-		//g.inputBuffer.nPts = testNum;
+		g.inputBuffer.bEnableCorp = 0;
+		g.inputBuffer.nPts = testNum;
 
-		//5.2 
+		//5. 
 		/*
 			当调用 GetOneAllocInputBuffer 获取到由 AllocInputBuffer 申请的输入图像帧
 			buffer的时，如果通过 CPU 来搬移输入的图像帧数据到此buffer，在把此 buffer
 			送给编码器之前，需要调用此接口来保证 dram 和 cache 中的数据一致性；
 		*/
 		
+#if(1 == USING_ION_INTERFACE_DIRECTLY)
+		ion_flush_cache(g.inputBuffer.pAddrVirY, g.sizeY);
+		ion_flush_cache(g.inputBuffer.pAddrVirC, g.sizeC);
+#else 
 		ret = FlushCacheAllocInputBuffer(g.pVideoEnc, &g.inputBuffer);
 		if(ret)
 			loge("FlushCacheAllocInputBuffer");
+#endif
 
 		//6. 入队列，把需要处理的图像地址放入到，pVideoEnc对应的队列地址上
 		ret = AddOneInputBuffer(g.pVideoEnc, &g.inputBuffer);
@@ -220,9 +247,11 @@ int main()
 		if(ret)
 			loge("AlreadyUsedInputBuffer");
 		
+#if(1 != USING_ION_INTERFACE_DIRECTLY)
 		ret = ReturnOneAllocInputBuffer(g.pVideoEnc, &g.inputBuffer);
 		if(ret)
 			loge("ReturnOneAllocInputBuffer");
+#endif
 
 		//9. 获取到out
 		ret = GetOneBitstreamFrame(g.pVideoEnc, &g.outputBuffer);
@@ -230,15 +259,11 @@ int main()
 			loge("GetOneBitstreamFrame");
 
 		//10. 写入文件
-		if (VENC_CODEC_H264 == g.codecType)
-		{
-			if (g.outputBuffer.nFlag & VENC_BUFFERFLAG_KEYFRAME) {
-				logi("get an KEY FRAME., frameNum: %d.", testNum);
-				VideoEncGetParameter(g.pVideoEnc, VENC_IndexParamH264SPSPPS, &g.sps_pps_data);
-				fwrite(g.sps_pps_data.pBuffer, 1, g.sps_pps_data.nLength, out_file);
-			}
+		if (g.outputBuffer.nFlag & VENC_BUFFERFLAG_KEYFRAME) {
+			VideoEncGetParameter(g.pVideoEnc, VENC_IndexParamH264SPSPPS, &g.sps_pps_data);
+			fwrite(g.sps_pps_data.pBuffer, 1, g.sps_pps_data.nLength, out_file);
 		}
-		
+
 		if(g.outputBuffer.nSize0)
 			fwrite(g.outputBuffer.pData0, 1, g.outputBuffer.nSize0, out_file);
 		
@@ -264,11 +289,19 @@ int main()
 		
 	}
 
+	sync();
 out:
-	if(out_file)
-		fclose(out_file);
-	if(in_file)
-		fclose(in_file);
+	
+#if(1 == USING_ION_INTERFACE_DIRECTLY)
+	if (g.inputBuffer.pAddrVirY)
+		ion_alloc_free(g.inputBuffer.pAddrVirY);
+	if (g.inputBuffer.pAddrVirC)
+		ion_alloc_free(g.inputBuffer.pAddrVirC);
+	ion_alloc_close();
+#endif
+
+	fclose(out_file);
+	fclose(in_file);
 
 	return 0;
 }
