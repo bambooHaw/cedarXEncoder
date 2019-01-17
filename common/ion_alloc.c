@@ -15,11 +15,12 @@
 #include <unistd.h>
 
 #include "ion.h"
+#include "ion_alloc.h"
 #include "list.h"
 #include "export.h"
 
 #define PAGE_SIZE		4096
-#define MEM_OFFSET		0x40000000UL
+#define MEM_OFFSET		0	//0x40000000UL
 
 #define ION_IOC_SUNXI_FLUSH_RANGE		5
 #define ION_IOC_SUNXI_FLUSH_ALL			6
@@ -98,11 +99,12 @@ void *ion_alloc_alloc(int size) {
 		pthread_mutex_unlock(&ion_mx);
 		return NULL;
 	}
-	size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1); /* align to PAGE_SIZE */
+	//	size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1); /* align to PAGE_SIZE */
 	memset(&alloc, 0, sizeof(alloc));
 	alloc.len = size;
 	alloc.align = PAGE_SIZE;
-	alloc.heap_id_mask = ION_HEAP_TYPE_DMA;
+	//alloc.heap_id_mask = ION_HEAP_TYPE_DMA;
+	alloc.heap_id_mask = ION_HEAP_TYPE_DMA_MASK;
 	alloc.flags = ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC;
 	ret = ioctl(ion_fd, ION_IOC_ALLOC, &alloc);
 	if (ret < 0) {
@@ -147,7 +149,7 @@ void *ion_alloc_alloc(int size) {
 		pthread_mutex_unlock(&ion_mx);
 		return NULL;
 	}
-	im->physAddr = (void *)phys.phys_addr - MEM_OFFSET;
+	im->physAddr = (void *)phys.phys_addr;	// - MEM_OFFSET;
 	INIT_LIST_HEAD(&im->lst);
 	list_add_tail(&im->lst, &im_lst);
 	pthread_mutex_unlock(&ion_mx);

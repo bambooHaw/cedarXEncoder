@@ -1,6 +1,7 @@
 CPPFLAGS = -Iinclude -I../util
 DEP_CFLAGS = -MMD -MP -MF $(@:%.o=%.d) -MT $(@:%.o=%.d)
-CFLAGS = -pthread -Wall -O3 -fpic -fvisibility=hidden -fomit-frame-pointer
+#CFLAGS = -pthread -Wall -O3 -fpic -fvisibility=hidden -fomit-frame-pointer
+CFLAGS = -pthread -Wall -O3 -fpic -fomit-frame-pointer
 LDFLAGS = -shared -Wl,-soname,$(BINS)
 LOADLIBES = -L../base
 LDLIBS = -lcedar_base
@@ -16,8 +17,7 @@ all: $(OBJS) $(BINS)
 
 $(BINS): $(OBJS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) $^ $(LOADLIBES) $(LDLIBS) -o $@
-	cp $(BINS) $(INSTALL_DIR_LIBS)
-
+	cp $(BINS) $(INSTALL_DIR_LIB) -v
 %.o: %.c
 	$(CC) $(DEP_CFLAGS) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 

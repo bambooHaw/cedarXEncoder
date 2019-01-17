@@ -16,8 +16,7 @@ all: $(OBJS) $(BINS)
 
 $(BINS): $(OBJS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) $^ $(LOADLIBES) $(LDLIBS) -o $@
-	cp $(BINS) $(INSTALL_DIR_LIBS)
-
+	cp $(BINS) $(INSTALL_DIR_LIB) -v
 %.o: %.c
 	$(CC) $(DEP_CFLAGS) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 

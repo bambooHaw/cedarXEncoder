@@ -20,16 +20,16 @@ int main(int argc, char **argv) {
 	FILE *in_file;
 	FILE *out_file;
 
-	testNumber = 1;	//250;
-	src_width = dst_width = 1920;	//1280;
-	src_height = dst_height = 1280;	//720;
+	testNumber = 250;
+	src_width = dst_width = 1280;
+	src_height = dst_height = 720;
 
-	in_file = fopen("./1080p.yuv", "r");	/* /dev/zero */
+	in_file = fopen("/dev/zero", "r");
 	if (!in_file) {
 		printf("open in_file fail\n");
 		return 1;
 	}
-	out_file = fopen("./1080p.h264", "w");
+	out_file = fopen("/xxx.h264", "w");
 	if (!out_file) {
 		fclose(in_file);
 		printf("open out_file fail\n");
@@ -67,10 +67,7 @@ int main(int argc, char **argv) {
 
 	pVideoEnc = VideoEncCreate(VENC_CODEC_H264);
 	if (!pVideoEnc)
-	{
-		printf("VideoEncCreate failed.\n");
 		goto err0;
-	}
 	VideoEncSetParameter(pVideoEnc, VENC_IndexParamH264Param, &h264Param);
 	VideoEncInit(pVideoEnc, &baseConfig);
 
