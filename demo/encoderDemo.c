@@ -92,6 +92,7 @@ void _encoderInfoInit(encoderInfo_t* p)
 
 void _debugShowBufferInfo(encoderInfo_t* p)
 {
+	printf("###################################################\n");
 	printf("---------------------------------------------------\n");
 	printf("inputBuffer:\n");
 	printf(" nID:%d\n nPts:%d\n nFlags:%d\n ispPicVar:%d\n", \
@@ -103,7 +104,7 @@ void _debugShowBufferInfo(encoderInfo_t* p)
 		p->outputBuffer.nID, p->outputBuffer.nPts, p->outputBuffer.nFlag, \
 		p->outputBuffer.nSize0, p->outputBuffer.nSize1, \
 		p->outputBuffer.pData0, p->outputBuffer.pData1);
-	printf("###################################################\n");
+	printf("---------------------------------------------------\n");
 
 }
 
