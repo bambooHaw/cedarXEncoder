@@ -1,160 +1,124 @@
-#include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "vencoder.h"
 #include <time.h>
+#include "log.h"
+#include "vencoder.h"
 #include "ion_alloc.h"
 
-int yu12_nv12(unsigned int width, unsigned int height, unsigned char *addr_uv, unsigned char *addr_tmp_uv)
+#define ENCODING_TO_H264	1
+
+typedef struct _encoderInfo
 {
-	unsigned int i, chroma_bytes;
-	unsigned char *u_addr = NULL;
-	unsigned char *v_addr = NULL;
-	unsigned char *tmp_addr = NULL;
+	VideoEncoder* pVideoEnc;	//视频编码器指针
+	int codecType;	//编码器 codec 类型
 
-	chroma_bytes = width*height/4;
+#if (1 == ENCODING_TO_H264)
+	VencH264Param h264Param;
+	VencHeaderData sps_pps_data;	//for VENC_BUFFERFLAG_KEYFRAME (Like I frame info)
+#endif
 
-	u_addr = addr_uv;
-	v_addr = addr_uv + chroma_bytes;
-	tmp_addr = addr_tmp_uv;
+	VencBaseConfig baseConfig;	//编码器基本初始化信息，包括是否做 scaler，颜色格式等
 
-	for(i=0; i<chroma_bytes; i++)
-	{
-		*(tmp_addr++) = *(u_addr++);
-		*(tmp_addr++) = *(v_addr++);
-	}
 
-	memcpy(addr_uv, addr_tmp_uv, chroma_bytes*2);	
+	/*
+	inputbuffer: 输入图像帧的buffer, buffer可由AllocInputBuffer()获得获取
+	相应变量的说明：
+		1. nID: 用来区分不同的 buffer；
+		2. nPts：当前图像帧的时间戳；
+		3. pAddrPhyY：当前图像帧 Y 分量的物理地址，配给硬件使用；
+		4. pAddrPhyC：当前图像帧 C 分量的物理地址，配给硬件使用；
+		5. pAddrVirY：当前图像帧 Y 分量的虚拟地址，可由 CPU 来搬移图像数据到此 buffer；
+		6. pAddrVirC：当前图像帧 C 分量的虚拟地址，可由 CPU 来搬移图像数据到此 buffer；
+	*/
+	VencInputBuffer inputBuffer;
 
-	return 0;
+	/*
+	outputBuffer：输出图像帧 buffer；
+	结构体变量说明：
+		1.nID：用来识别不同的 buffer：
+		2.nPts：编码器不对时间戳信息做处理，输出 buffer 中的 pts 对应相应输入buffer 中的 pts；
+		3.nSize0：输出码流的第一部分的大小；
+		4.nSize1：输出码流的第二部分的大小；
+		5.pData0：输出码流的第一部分的地址；
+		6.pData1：输出码流的第二部分的地址；
+	*/
+	VencOutputBuffer outputBuffer;
+
+	unsigned int sizeY;
+	unsigned int sizeC;
+
+
+}encoderInfo_t;
+
+
+
+void _encoderInfoInit(encoderInfo_t* p)
+{
+	//clear all info
+	memset(p, 0, sizeof(encoderInfo_t));
+
+	
+#if (1 == ENCODING_TO_H264)
+	//codec type
+	p->codecType = VENC_CODEC_H264;
+	
+	//set h264 encoding param
+	memset(&p->h264Param, 0, sizeof(VencH264Param));
+	p->h264Param.sProfileLevel.nProfile = VENC_H264ProfileMain;
+	p->h264Param.sProfileLevel.nLevel = VENC_H264Level31;
+	p->h264Param.bEntropyCodingCABAC = 1;	///* 0:CAVLC 1:CABAC*/
+	p->h264Param.sQPRange.nMinqp = 10;
+	p->h264Param.sQPRange.nMaxqp = 40;
+	p->h264Param.nFramerate = 25; /* fps */
+	p->h264Param.nBitrate = 4*1024*1024; /* bps 码率(code rate) */
+	p->h264Param.nMaxKeyInterval = 25;
+	p->h264Param.nCodingMode = VENC_FRAME_CODING;	//VENC_FIELD_CODING
+#endif
+
+	memset(&p->baseConfig, 0 ,sizeof(VencBaseConfig));
+	p->baseConfig.nInputWidth= 1920;
+	p->baseConfig.nInputHeight = 1080;
+	p->baseConfig.nStride = 1920;
+	p->baseConfig.nDstWidth = 1920;
+	p->baseConfig.nDstHeight = 1080;
+	p->baseConfig.eInputFormat = VENC_PIXEL_YUV420SP;
+
+	//for YUV420
+	p->sizeY = p->baseConfig.nInputWidth * p->baseConfig.nInputHeight;
+	p->sizeC = p->sizeY/2;
+
+}
+
+void _debugShowBufferInfo(encoderInfo_t* p)
+{
+	printf("---------------------------------------------------\n");
+	printf("inputBuffer:\n");
+	printf(" nID:%d\n nPts:%d\n nFlags:%d\n ispPicVar:%d\n", \
+		p->inputBuffer.nID, p->inputBuffer.nPts, p->inputBuffer.nFlag, p->inputBuffer.ispPicVar);
+	printf(" PhyY:0x%08x VirY:0x%08x\n PhyC:0x%08x VirC:0x%08x\n", p->inputBuffer.pAddrPhyY, p->inputBuffer.pAddrVirY, p->inputBuffer.pAddrPhyC, p->inputBuffer.pAddrVirC);
+		
+	printf("outputBuffer:\n");
+	printf(" nID:%d\n nPts:%d\n nFlags:%d\n nSize0:%d\n nSize1:%d\n pData0:%p\n pData1:%p\n", \
+		p->outputBuffer.nID, p->outputBuffer.nPts, p->outputBuffer.nFlag, \
+		p->outputBuffer.nSize0, p->outputBuffer.nSize1, \
+		p->outputBuffer.pData0, p->outputBuffer.pData1);
+	printf("###################################################\n");
+
 }
 
 int main()
 {
-	VencBaseConfig baseConfig;
-	VencAllocateBufferParam bufferParam;
-	VideoEncoder* pVideoEnc = NULL;
-	VencInputBuffer inputBuffer;
-	VencOutputBuffer outputBuffer;
-	VencHeaderData sps_pps_data;
-	VencH264Param h264Param;
-	VencH264FixQP fixQP;
-	EXIFInfo exifinfo;
-	VencCyclicIntraRefresh sIntraRefresh;
-	unsigned int src_width,src_height,dst_width,dst_height;
-	unsigned char *uv_tmp_buffer = NULL;
-	int ret = 0;
-	VencROIConfig sRoiConfig[4];
+	int ret = 0, i = 0, testNumber = 1;
+	//global info 
+	encoderInfo_t g;
 
-
-	// roi
-	sRoiConfig[0].bEnable = 1;
-	sRoiConfig[0].index = 0;
-	sRoiConfig[0].nQPoffset = 10;
-	sRoiConfig[0].sRect.nLeft = 320;
-	sRoiConfig[0].sRect.nTop = 180;
-	sRoiConfig[0].sRect.nWidth = 320;
-	sRoiConfig[0].sRect.nHeight = 180;
-
-
-	sRoiConfig[1].bEnable = 1;
-	sRoiConfig[1].index = 1;
-	sRoiConfig[1].nQPoffset = 10;
-	sRoiConfig[1].sRect.nLeft = 320;
-	sRoiConfig[1].sRect.nTop = 180;
-	sRoiConfig[1].sRect.nWidth = 320;
-	sRoiConfig[1].sRect.nHeight = 180;
-
-
-	sRoiConfig[2].bEnable = 1;
-	sRoiConfig[2].index = 2;
-	sRoiConfig[2].nQPoffset = 10;
-	sRoiConfig[2].sRect.nLeft = 320;
-	sRoiConfig[2].sRect.nTop = 180;
-	sRoiConfig[2].sRect.nWidth = 320;
-	sRoiConfig[2].sRect.nHeight = 180;
-
-
-	sRoiConfig[3].bEnable = 1;
-	sRoiConfig[3].index = 3;
-	sRoiConfig[3].nQPoffset = 10;
-	sRoiConfig[3].sRect.nLeft = 320;
-	sRoiConfig[3].sRect.nTop = 180;
-	sRoiConfig[3].sRect.nWidth = 320;
-	sRoiConfig[3].sRect.nHeight = 180;
-
-
-	//intraRefresh
+	_encoderInfoInit(&g);
 	
-	sIntraRefresh.bEnable = 1;
-	sIntraRefresh.nBlockNumber = 10;
-
-	//fix qp mode
-	fixQP.bEnable = 1;
-	fixQP.nIQp = 20;
-	fixQP.nPQp = 30;
-	
-	exifinfo.ThumbWidth = 176;
-	exifinfo.ThumbHeight = 144;
-
-	//* h264 param
-	memset(&h264Param, 0, sizeof(VencH264Param));
-	h264Param.sProfileLevel.nProfile = VENC_H264ProfileMain;
-	h264Param.sProfileLevel.nLevel = VENC_H264Level31;
-	h264Param.bEntropyCodingCABAC = 1;	///* 0:CAVLC 1:CABAC*/
-	h264Param.sQPRange.nMinqp = 10;
-	h264Param.sQPRange.nMaxqp = 40;
-	h264Param.nFramerate = 25; /* fps */
-	h264Param.nBitrate = 4*1024*1024; /* bps */
-	h264Param.nMaxKeyInterval = 25;
-	h264Param.nCodingMode = VENC_FRAME_CODING;	//VENC_FIELD_CODING
-	
-
-	int codecType = VENC_CODEC_H264;	//VENC_CODEC_JPEG
-	int testNumber = 1;
-
-	strcpy((char*)exifinfo.CameraMake,		"allwinner make test");
-	strcpy((char*)exifinfo.CameraModel,		"allwinner model test");
-	strcpy((char*)exifinfo.DateTime, 		"2014:02:21 10:54:05");
-	strcpy((char*)exifinfo.gpsProcessingMethod,  "allwinner gps");
-
-	exifinfo.Orientation = 0;
-	
-	exifinfo.ExposureTime.num = 2;
-	exifinfo.ExposureTime.den = 1000;
-
-	exifinfo.FNumber.num = 20;
-	exifinfo.FNumber.den = 10;
-	exifinfo.ISOSpeed = 50;
-
-	exifinfo.ExposureBiasValue.num= -4;
-	exifinfo.ExposureBiasValue.den= 1;
-
-	exifinfo.MeteringMode = 1;
-	exifinfo.FlashUsed = 0;
-
-	exifinfo.FocalLength.num = 1400;
-	exifinfo.FocalLength.den = 100;
-
-	exifinfo.DigitalZoomRatio.num = 4;
-	exifinfo.DigitalZoomRatio.den = 1;
-
-	exifinfo.WhiteBalance = 1;
-	exifinfo.ExposureMode = 1;
-
-	exifinfo.enableGpsInfo = 1;
-
-	exifinfo.gps_latitude = 23.2368;
-	exifinfo.gps_longitude = 24.3244;
-	exifinfo.gps_altitude = 1234.5;
-	
-	exifinfo.gps_timestamp = (long)time(NULL);
-
 	FILE *in_file = NULL;
 	FILE *out_file = NULL;
 
-	if(codecType == VENC_CODEC_H264)
+	if(VENC_CODEC_H264 == g.codecType)
 	{
 		in_file = fopen("./1080p.yuv", "r");
 		if(in_file == NULL)
@@ -171,70 +135,19 @@ int main()
 		}
 	}
 
-	src_width = 1920;
-	src_height = 1080;
-	dst_width = 1920;
-	dst_height = 1080;
-	
-	memset(&baseConfig, 0 ,sizeof(VencBaseConfig));
-	baseConfig.nInputWidth= src_width;
-	baseConfig.nInputHeight = src_height;
-	baseConfig.nStride = src_width;
-	
-	baseConfig.nDstWidth = dst_width;
-	baseConfig.nDstHeight = dst_height;
-	baseConfig.eInputFormat = VENC_PIXEL_YUV420SP;
-
-	memset(&bufferParam, 0 ,sizeof(VencAllocateBufferParam));
-	bufferParam.nBufferNum = 4;
-	bufferParam.nSizeY = baseConfig.nInputWidth*baseConfig.nInputHeight;
-	bufferParam.nSizeC = baseConfig.nInputWidth*baseConfig.nInputHeight/2;
-	
-	
-	//1. 
-	pVideoEnc = VideoEncCreate(codecType);
-	if(!pVideoEnc)
+	//1. 视频编码器支持创建多个编码器，支持多路编码
+	g.pVideoEnc = VideoEncCreate(g.codecType);
+	if(!g.pVideoEnc)
 		loge("VideoEncCreate");
-
-	logd("pVideoEnc: %p", pVideoEnc);
 	
-	if(codecType == VENC_CODEC_H264)
+	//2. 设置编码信息
+	if(VENC_CODEC_H264 == g.codecType)
 	{
-		int value = 0;
-		
-		VideoEncSetParameter(pVideoEnc, VENC_IndexParamH264Param, &h264Param);
-		
-		VideoEncGetParameter(pVideoEnc, VENC_IndexParamH264SPSPPS, &sps_pps_data);
-		fwrite(sps_pps_data.pBuffer, 1, sps_pps_data.nLength, out_file);
-		logd("sps_pps_data.nLength: %d", sps_pps_data.nLength);
-		unsigned int head_num = 0;
-		for(head_num=0; head_num<sps_pps_data.nLength; head_num++)
-		{
-			;
-			logd("the sps_pps :%02x\n", *(sps_pps_data.pBuffer+head_num));
-		}
-
-		//value = 0;
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamIfilter, &value);
-
-		//value = 0; //degree
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamRotation, &value);
-
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamH264FixQP, &fixQP);
-
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamH264CyclicIntraRefresh, &sIntraRefresh);
-
-		//value = 720/4;
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamSliceHeight, &value);
-
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamROIConfig, &sRoiConfig[0]);
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamROIConfig, &sRoiConfig[1]);
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamROIConfig, &sRoiConfig[2]);
-		//VideoEncSetParameter(pVideoEnc, VENC_IndexParamROIConfig, &sRoiConfig[3]);
+		VideoEncSetParameter(g.pVideoEnc, VENC_IndexParamH264Param, &g.h264Param);
 	}
 
-	//2. 
-	ret = VideoEncInit(pVideoEnc, &baseConfig);
+	//3. 初始化视频编码器
+	ret = VideoEncInit(g.pVideoEnc, &g.baseConfig);
 	if(ret)
 		loge("VideoEncInit");
 	
@@ -243,100 +156,65 @@ int main()
 	//ret = AllocInputBuffer(pVideoEnc, &bufferParam);
 
 
-	//3.1
+	//4.1 获取buffer空间，用于图像的处理缓存
 	ret = ion_alloc_open();
 	if(ret)
 		loge("ion_alloc_open");
 
-	inputBuffer.pAddrVirY = (char *)ion_alloc_alloc(baseConfig.nInputWidth*baseConfig.nInputHeight);
-	if (!inputBuffer.pAddrVirY)
+	g.inputBuffer.pAddrVirY = (char *)ion_alloc_alloc(g.sizeY);
+	if (!g.inputBuffer.pAddrVirY)
 		loge("inputBuffer.pAddrVirY is NULL");
-
-	inputBuffer.pAddrVirC = (char *)ion_alloc_alloc(baseConfig.nInputWidth*baseConfig.nInputHeight/2);
-	if (!inputBuffer.pAddrVirC)
+		
+	g.inputBuffer.pAddrVirC = (char *)ion_alloc_alloc(g.sizeC);
+	if (!g.inputBuffer.pAddrVirC)
 		loge("inputBuffer.pAddrVirC is NULL");
 
-	inputBuffer.pAddrPhyY = (char *)ion_alloc_vir2phy(inputBuffer.pAddrVirY);
-	inputBuffer.pAddrPhyC = (char *)ion_alloc_vir2phy(inputBuffer.pAddrVirC);
+	g.inputBuffer.pAddrPhyY = (char *)ion_alloc_vir2phy(g.inputBuffer.pAddrVirY);
+	g.inputBuffer.pAddrPhyC = (char *)ion_alloc_vir2phy(g.inputBuffer.pAddrVirC);
 
-	ion_flush_cache(inputBuffer.pAddrVirY, baseConfig.nInputWidth*baseConfig.nInputHeight);
-	ion_flush_cache(inputBuffer.pAddrVirC, baseConfig.nInputWidth*baseConfig.nInputHeight/2);
-
-	logd("\nPhyY:0x%08x VirY:0x%08x\n PhyC:0x%08x VirC:0x%08x\n", inputBuffer.pAddrPhyY, inputBuffer.pAddrVirY, inputBuffer.pAddrPhyC, inputBuffer.pAddrVirC);
-
-	if(baseConfig.eInputFormat == VENC_PIXEL_YUV420SP)
-	{
-		uv_tmp_buffer = (unsigned char*)malloc(baseConfig.nInputWidth*baseConfig.nInputHeight/2);
-		if(uv_tmp_buffer == NULL)
-		{
-			loge("malloc uv_tmp_buffer fail\n");
-			return -1;
-		}
-	}
-
-	int i = 0;
 	for(i=0; i<testNumber; i++)
 	{
 		//GetOneAllocInputBuffer(pVideoEnc, &inputBuffer);
-		unsigned int sizeY, sizeC;
+		unsigned int _sizeY, _sizeC;
 		
-		sizeY = fread(inputBuffer.pAddrVirY, 1, baseConfig.nInputWidth*baseConfig.nInputHeight, in_file);
-		sizeC = fread(inputBuffer.pAddrVirC, 1, baseConfig.nInputWidth*baseConfig.nInputHeight/2, in_file);
+		_sizeY = fread(g.inputBuffer.pAddrVirY, 1, g.sizeY, in_file);
+		_sizeC = fread(g.inputBuffer.pAddrVirC, 1, g.sizeC, in_file);
 
-		if((sizeY!= baseConfig.nInputWidth*baseConfig.nInputHeight) || (sizeC!= baseConfig.nInputWidth*baseConfig.nInputHeight/2))
+		if((_sizeY != g.sizeY) || (_sizeC != g.sizeC))
 		{
 			fseek(in_file, 0L, SEEK_SET);
-			sizeY = fread(inputBuffer.pAddrVirY, 1, baseConfig.nInputWidth*baseConfig.nInputHeight, in_file);
-			sizeC = fread(inputBuffer.pAddrVirC, 1, baseConfig.nInputWidth*baseConfig.nInputHeight/2, in_file);
+			_sizeY = fread(g.inputBuffer.pAddrVirY, 1, g.sizeY, in_file);
+			_sizeC = fread(g.inputBuffer.pAddrVirC, 1, g.sizeC, in_file);
 		}
 		
-		inputBuffer.bEnableCorp = 0;
-		inputBuffer.nPts = i;
-		
-		if(baseConfig.eInputFormat == VENC_PIXEL_YUV420SP)
-		{
-			ret = yu12_nv12(baseConfig.nInputWidth, baseConfig.nInputHeight, inputBuffer.pAddrVirC, uv_tmp_buffer);
-			if(ret)
-				loge("yu12_nv12");
-		}
-		
-		//added
-#if 0
-		inputBuffer.sCropInfo.nLeft =  0;
-		inputBuffer.sCropInfo.nTop  =  0;
-		inputBuffer.sCropInfo.nWidth  =  1920;
-		inputBuffer.sCropInfo.nHeight =  1080;
-#endif
-	
-		ion_flush_cache(inputBuffer.pAddrVirY, baseConfig.nInputWidth*baseConfig.nInputHeight);
-		ion_flush_cache(inputBuffer.pAddrVirC, baseConfig.nInputWidth*baseConfig.nInputHeight/2);
-		//ret = FlushCacheAllocInputBuffer(pVideoEnc, &inputBuffer);
-		
-		logd("\nPhyY:0x%08x VirY:0x%08x\n PhyC:0x%08x VirC:0x%08x\n", inputBuffer.pAddrPhyY, inputBuffer.pAddrVirY, inputBuffer.pAddrPhyC, inputBuffer.pAddrVirC);
+		g.inputBuffer.bEnableCorp = 0;
+		g.inputBuffer.nPts = i;
 
-		ret = AddOneInputBuffer(pVideoEnc, &inputBuffer);
+		//5. 
+		/*
+			当调用 GetOneAllocInputBuffer 获取到由 AllocInputBuffer 申请的输入图像帧
+			buffer的时，如果通过 CPU 来搬移输入的图像帧数据到此buffer，在把此 buffer
+			送给编码器之前，需要调用此接口来保证 dram 和 cache 中的数据一致性；
+		*/
+		ion_flush_cache(g.inputBuffer.pAddrVirY, g.sizeY);
+		ion_flush_cache(g.inputBuffer.pAddrVirC, g.sizeC);
+		//ret = FlushCacheAllocInputBuffer(pVideoEnc, &inputBuffer);
+
+		//6. 入队列，把需要处理的图像地址放入到，pVideoEnc对应的队列地址上
+		ret = AddOneInputBuffer(g.pVideoEnc, &g.inputBuffer);
 		if(ret)
 			loge("AddOneInputBuffer");
 		
-		logd("###################################################");
-		logw("inputBuffer:");
-		logd("\n nID:%d\n nPts:%d\n nFlags:%d\n ispPicVar:%d\n", \
-			inputBuffer.nID, inputBuffer.nPts, inputBuffer.nFlag, inputBuffer.ispPicVar);
-		printf(" PhyY:0x%08x VirY:0x%08x\n PhyC:0x%08x VirC:0x%08x\n", inputBuffer.pAddrPhyY, inputBuffer.pAddrVirY, inputBuffer.pAddrPhyC, inputBuffer.pAddrVirC);
-			
-		logw("outputBuffer:");
-		logd("\n nID:%d\n nPts:%d\n nFlags:%d\n nSize0:%d\n nSize1:%d\n pData0:%p\n pData1:%p\n", \
-			outputBuffer.nID, outputBuffer.nPts, outputBuffer.nFlag, \
-			outputBuffer.nSize0, outputBuffer.nSize1, \
-			outputBuffer.pData0, outputBuffer.pData1);
-		logd("###################################################");
 		
+		_debugShowBufferInfo(&g);
 
-		ret = VideoEncodeOneFrame(pVideoEnc);
+		//7. 编码
+		ret = VideoEncodeOneFrame(g.pVideoEnc);
 		if(ret)
 			loge("VideoEncodeOneFrame, ret: %d.", ret);
-			
-		ret = AlreadyUsedInputBuffer(pVideoEnc,&inputBuffer);
+
+		//8. 出队列，获取处理队列中编码后的图像数据到inputBuffer中
+		ret = AlreadyUsedInputBuffer(g.pVideoEnc, &g.inputBuffer);
 		if(ret)
 			loge("AlreadyUsedInputBuffer");
 		
@@ -344,76 +222,53 @@ int main()
 		//if(ret)
 			//loge("ReturnOneAllocInputBuffer");
 
-		ret = GetOneBitstreamFrame(pVideoEnc, &outputBuffer);
+		//9. 获取到out
+		ret = GetOneBitstreamFrame(g.pVideoEnc, &g.outputBuffer);
 		if(ret)
 			loge("GetOneBitstreamFrame");
 
-		logd("###################################################");
-		logw("inputBuffer:");
-		logd("\n nID:%d\n nPts:%d\n nFlags:%d\n ispPicVar:%d\n", \
-			inputBuffer.nID, inputBuffer.nPts, inputBuffer.nFlag, inputBuffer.ispPicVar);
-		printf(" PhyY:0x%08x VirY:0x%08x\n PhyC:0x%08x VirC:0x%08x\n", inputBuffer.pAddrPhyY, inputBuffer.pAddrVirY, inputBuffer.pAddrPhyC, inputBuffer.pAddrVirC);
-			
-		logw("outputBuffer:");
-		logd("\n nID:%d\n nPts:%d\n nFlags:%d\n nSize0:%d\n nSize1:%d\n pData0:%p\n pData1:%p\n", \
-			outputBuffer.nID, outputBuffer.nPts, outputBuffer.nFlag, \
-			outputBuffer.nSize0, outputBuffer.nSize1, \
-			outputBuffer.pData0, outputBuffer.pData1);
-		logd("###################################################");
 
-
-		
-
-		ion_flush_cache(inputBuffer.pAddrVirY, baseConfig.nInputWidth*baseConfig.nInputHeight);
-		ion_flush_cache(inputBuffer.pAddrVirC, baseConfig.nInputWidth*baseConfig.nInputHeight/2);
-
-
-		if (outputBuffer.nFlag & VENC_BUFFERFLAG_KEYFRAME) {
-			VideoEncGetParameter(pVideoEnc, VENC_IndexParamH264SPSPPS, &sps_pps_data);
-			fwrite(sps_pps_data.pBuffer, 1, sps_pps_data.nLength, out_file);
+		//10. 写入文件
+		if (g.outputBuffer.nFlag & VENC_BUFFERFLAG_KEYFRAME) {
+			VideoEncGetParameter(g.pVideoEnc, VENC_IndexParamH264SPSPPS, &g.sps_pps_data);
+			fwrite(g.sps_pps_data.pBuffer, 1, g.sps_pps_data.nLength, out_file);
 		}
 
-		if(outputBuffer.nSize0)
-			fwrite(outputBuffer.pData0, 1, outputBuffer.nSize0, out_file);
+		if(g.outputBuffer.nSize0)
+			fwrite(g.outputBuffer.pData0, 1, g.outputBuffer.nSize0, out_file);
 		
-		if(outputBuffer.nSize1)
-			fwrite(outputBuffer.pData1, 1, outputBuffer.nSize1, out_file);
+		if(g.outputBuffer.nSize1)
+			fwrite(g.outputBuffer.pData1, 1, g.outputBuffer.nSize1, out_file);
 
-		FreeOneBitStreamFrame(pVideoEnc, &outputBuffer);
+		FreeOneBitStreamFrame(g.pVideoEnc, &g.outputBuffer);
 
 
-		if(h264Param.nCodingMode==VENC_FIELD_CODING && codecType==VENC_CODEC_H264)
+		if((VENC_FIELD_CODING == g.h264Param.nCodingMode)&& (VENC_CODEC_H264 == g.codecType))
 		{
-			GetOneBitstreamFrame(pVideoEnc, &outputBuffer);
-			logd("oubuffer size: %d, %d", outputBuffer.nSize0,outputBuffer.nSize1);
+			GetOneBitstreamFrame(g.pVideoEnc, &g.outputBuffer);
+			logd("oubuffer size: %d, %d", g.outputBuffer.nSize0, g.outputBuffer.nSize1);
+			
+			if(g.outputBuffer.nSize0)
+				fwrite(g.outputBuffer.pData0, 1, g.outputBuffer.nSize0, out_file);
 
-			fwrite(outputBuffer.pData0, 1, outputBuffer.nSize0, out_file);
-
-			if(outputBuffer.nSize1)
-			{
-				fwrite(outputBuffer.pData1, 1, outputBuffer.nSize1, out_file);
-			}
+			if(g.outputBuffer.nSize1)
+				fwrite(g.outputBuffer.pData1, 1, g.outputBuffer.nSize1, out_file);
 				
-			FreeOneBitStreamFrame(pVideoEnc, &outputBuffer);
+			FreeOneBitStreamFrame(g.pVideoEnc, &g.outputBuffer);
 		}
 		
 	}
 
-	//sync();
+	sync();
 out:
-
-	logd("out inputbuf: pAddrVirY: %p, pAddrVirC: %p\n", inputBuffer.pAddrVirY, inputBuffer.pAddrVirC);
-
-	if (inputBuffer.pAddrVirY)
-		ion_alloc_free(inputBuffer.pAddrVirY);
-	if (inputBuffer.pAddrVirC)
-		ion_alloc_free(inputBuffer.pAddrVirC);
+	if (g.inputBuffer.pAddrVirY)
+		ion_alloc_free(g.inputBuffer.pAddrVirY);
+	if (g.inputBuffer.pAddrVirC)
+		ion_alloc_free(g.inputBuffer.pAddrVirC);
 	ion_alloc_close();
 
 	fclose(out_file);
 	fclose(in_file);
-	if(uv_tmp_buffer)
-		free(uv_tmp_buffer);
 
 	return 0;
 }
